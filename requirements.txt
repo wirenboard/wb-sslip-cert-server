@@ -4,3 +4,4 @@ python-dotenv
 pydantic_settings
 sqlmodel
 fastapi
+fastapi[standard]
