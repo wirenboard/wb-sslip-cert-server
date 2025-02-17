@@ -24,9 +24,9 @@ display_obj.set_display(display_obj.FileDisplay(sys.stdout, False))
 class Settings(BaseSettings):
     dns_auth_url: str = "http://localhost:8080/update"
     dns_auth_propagation_delay: int = 10
-    email: str = None
-    eab_kid: str = None
-    eab_hmac_key: str = None
+    email: str
+    eab_kid: str | None = None
+    eab_hmac_key: str | None = None
     acme_url: str = "https://acme.zerossl.com/v2/DV90"
     db_file_name: str = "database.db"
     log_level: str = "DEBUG"
