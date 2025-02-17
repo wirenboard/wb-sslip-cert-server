@@ -1,0 +1,6 @@
+certbot>=3.2.0
+python-multipart
+python-dotenv
+pydantic_settings
+sqlmodel
+fastapi
