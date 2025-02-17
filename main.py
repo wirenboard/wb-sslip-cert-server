@@ -23,14 +23,14 @@ display_obj.set_display(display_obj.FileDisplay(sys.stdout, False))
 
 class Settings(BaseSettings):
     dns_auth_url: str = "http://localhost:8080/update"
-    dns_auth_propagation_delay: int = 10
+    dns_auth_propagation_delay: int = 5
     email: str
     eab_kid: str | None = None
     eab_hmac_key: str | None = None
-    acme_url: str = "https://acme.zerossl.com/v2/DV90"
+    acme_url: str = "https://acme-v02.api.letsencrypt.org/directory"
     db_file_name: str = "database.db"
     log_level: str = "DEBUG"
-    issuing_timeout: int = 300
+    issuing_timeout: int = 120
     domain_suffix: str
 
     model_config = SettingsConfigDict(env_file=".env")
@@ -48,8 +48,8 @@ engine = create_engine(sqlite_url, connect_args=connect_args)
 
 class CertbotBackendAccount(SQLModel, table=True):
     id: int | None = Field(primary_key=True, default=None)
-    eab_kid: str = Field()
-    eab_hmac_key: str = Field()
+    eab_kid: str | None = Field()
+    eab_hmac_key: str |None = Field()
     email: str = Field()
     directory_url: str = Field()
 
@@ -108,7 +108,7 @@ class CertificateIssuer:
                 account_db_entry = CertbotBackendAccount()
                 session.add(account_db_entry)
 
-                if "eab_kid" and "eab_hmac_key":
+                if self.eab_kid and self.eab_hmac_key:
                     eab = messages.ExternalAccountBinding.from_data(
                         account_public_key=self.acc_key,
                         kid=self.eab_kid,
@@ -139,7 +139,6 @@ class CertificateIssuer:
     async def validate_challenges(self, orderr: messages.OrderResource, deadline: datetime.datetime):
         authz_list = orderr.authorizations
 
-        already_validated_domains = set()
         for authz in authz_list:
             # Choosing challenge.
             # authz.body.challenges is a set of ChallengeBody objects.
@@ -152,26 +151,22 @@ class CertificateIssuer:
                     response, validation = challb.response_and_validation(self.client_acme.net.key)
 
                     domain_name = authz.body.identifier.value
-                    if domain_name in already_validated_domains:
-                        logging.debug("Domain %s already validated", domain_name)
-                    else:
-                        validation_name = challb.validation_domain_name(domain_name)
+                    validation_name = challb.validation_domain_name(domain_name)
 
-                        logging.debug(
-                            "Performing challenge for %s with %s=%s", domain_name, validation_name, validation
-                        )
+                    logging.debug(
+                        "Performing challenge for %s with %s=%s", domain_name, validation_name, validation
+                    )
 
-                        data = {"domain": validation_name.lower() + ".", "txt": validation}
-                        # Our DNS server for ACME challenges is typically run on the same machine,
-                        # so we don't really need async http here
-                        authenticator_response = requests.post(
-                            settings.dns_auth_url, data=json.dumps(data), timeout=10
-                        )
-                        if authenticator_response.status_code != 200:
-                            raise RuntimeError(f"Failed to update DNS record: {response.text}")
+                    data = {"domain": validation_name.lower() + ".", "txt": validation}
+                    # Our DNS server for ACME challenges is typically run on the same machine,
+                    # so we don't really need async http here
+                    authenticator_response = requests.post(
+                        settings.dns_auth_url, data=json.dumps(data), timeout=10
+                    )
+                    if authenticator_response.status_code != 200:
+                        raise RuntimeError(f"Failed to update DNS record: {response.text}")
 
-                        await asyncio.sleep(settings.dns_auth_propagation_delay)
-                        already_validated_domains.add(domain_name)
+                    await asyncio.sleep(settings.dns_auth_propagation_delay)
 
                     # Let the CA server know that we are ready for the challenge.
                     self.client_acme.answer_challenge(challb, response)
