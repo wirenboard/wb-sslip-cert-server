@@ -320,7 +320,7 @@ async def issue_cert(csr: Annotated[bytes, File()], x_cert_subject_dn: Annotated
         cn = name.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
         logging.debug("Extracted CN: %s", cn)
     except Exception as e:
-        logging.error("Failed to parse subject DN: %s", e)
+        logging.error("Failed to parse subject DN", exc_info=e)
         raise HTTPException(status_code=422, detail="Invalid subject DN") from e
 
     match = re.fullmatch(r"wirenboard-([A-Za-z0-9]+)", cn)
