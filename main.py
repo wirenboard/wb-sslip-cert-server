@@ -312,11 +312,11 @@ def on_startup():
 
 
 @app.post("/api/v1/issue")
-async def issue_cert(csr: Annotated[bytes, File()], x_cert_subject_dn: Annotated[str, Header()]):
+async def issue_cert(csr: Annotated[bytes, File()], x_forwarded_tls_client_cert_info: Annotated[str, Header()]):
     logging.debug("Got CSR: %s", csr.decode("utf8"))
-    logging.debug("Got x_cert_subject_dn: %s", x_cert_subject_dn)
+    logging.debug("Got x_cert_subject_dn: %s", x_forwarded_tls_client_cert_info)
     try:
-        name = x509.Name.from_rfc4514_string(x_cert_subject_dn)
+        name = x509.Name.from_rfc4514_string(x_forwarded_tls_client_cert_info)
         cn = name.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
         logging.debug("Extracted CN: %s", cn)
     except Exception as e:
