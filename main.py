@@ -313,11 +313,24 @@ def on_startup():
 
 @app.post("/api/v1/issue")
 async def issue_cert(csr: Annotated[bytes, File()], x_forwarded_tls_client_cert_info: Annotated[str, Header()]):
+
+    def parse_cn(input: str) -> str:
+        """Parse the subject CN from the x-forwarded header."""
+        # FIXME: Traefik wraps CNs with the Subject="%" and encodes them in URL format,
+        # could not find proper way to parse it
+        pat = re.compile(
+            "Subject%3D%22CN%3Dwirenboard-(.*?)%22"
+        )
+        match = pat.search(input)
+        if match:
+            return "wirenboard-" + match.group(1)
+
     logging.debug("Got CSR: %s", csr.decode("utf8"))
     logging.debug("Got x_cert_subject_dn: %s", x_forwarded_tls_client_cert_info)
     try:
-        name = x509.Name.from_rfc4514_string(x_forwarded_tls_client_cert_info)
-        cn = name.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        # name = x509.Name.from_rfc4514_string(x_forwarded_tls_client_cert_info)
+        # cn = name.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        cn = parse_cn(x_forwarded_tls_client_cert_info)
         logging.debug("Extracted CN: %s", cn)
     except Exception as e:
         logging.error("Failed to parse subject DN", exc_info=e)
