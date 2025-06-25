@@ -311,7 +311,9 @@ def on_startup():
 
 
 @app.post("/api/v1/issue")
-async def issue_cert(csr: Annotated[bytes, File()], x_forwarded_tls_client_cert_info: Annotated[str, Header()]):
+async def issue_cert(
+    csr: Annotated[bytes, File()], x_forwarded_tls_client_cert_info: Annotated[str, Header()]
+):
 
     def parse_cn(input: str) -> str:
         """Parse the subject CN from the x-forwarded header."""
