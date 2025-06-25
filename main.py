@@ -89,7 +89,7 @@ class CertificateIssuer:
             # First, initialize the account key, client network instance and the directory
             if account_db_entry is None:
                 self.acc_key = self.create_account_key()
-                logging.debug("acc_key: %s", self.acc_key)
+                logging.debug("No account_db_entry found, new acc_key: %s", self.acc_key)
                 directory_url = self.directory_url
             else:
                 logging.debug("account_db_entry = %s", account_db_entry)
