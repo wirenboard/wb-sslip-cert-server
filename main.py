@@ -57,7 +57,8 @@ class CertbotBackendAccount(SQLModel, table=True):
 
 
 class CertificateIssuer:
-    def __init__(self, local_settings, allowed_domains: list[str]):
+    def __init__(self, local_settings, allowed_domains: list[str], engine):
+        self.engine = engine
         self.allowed_domains = allowed_domains
         self.email = settings.email
 
@@ -77,7 +78,7 @@ class CertificateIssuer:
 
     def get_acme_client_and_account(self):
         # Register account and accept TOS
-        with Session(engine) as session:
+        with Session(self.engine) as session:
             account_db_entry = session.exec(
                 select(CertbotBackendAccount)
                 .where(CertbotBackendAccount.email == self.email)
@@ -344,7 +345,7 @@ async def issue_cert(
 
     allowed_domains = [f"*.{wb_serial}.{settings.domain_suffix}", f"{wb_serial}.{settings.domain_suffix}"]
 
-    issuer = CertificateIssuer(settings, allowed_domains)
+    issuer = CertificateIssuer(settings, allowed_domains, engine)
     fullchain_pem = await issuer.sign(csr)
     logging.debug("resulting cert chain %s", fullchain_pem)
 
