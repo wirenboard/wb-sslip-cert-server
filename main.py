@@ -57,7 +57,7 @@ class CertbotBackendAccount(SQLModel, table=True):
 
 
 class CertificateIssuer:
-    def __init__(self, settings_, allowed_domains: list[str]):
+    def __init__(self, local_settings, allowed_domains: list[str]):
         self.allowed_domains = allowed_domains
         self.email = settings.email
 
@@ -66,9 +66,9 @@ class CertificateIssuer:
         self.client_acme = None
         self.regr = None
         self.upstream_account = None
-        self.eab_kid = settings_.eab_kid
-        self.eab_hmac_key = settings_.eab_hmac_key
-        self.directory_url = settings_.acme_url
+        self.eab_kid = local_settings.eab_kid
+        self.eab_hmac_key = local_settings.eab_hmac_key
+        self.directory_url = local_settings.acme_url
 
     def create_account_key(self):
         return jose.JWKRSA(
