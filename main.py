@@ -323,6 +323,7 @@ async def issue_cert(csr: Annotated[bytes, File()], x_forwarded_tls_client_cert_
         match = pat.search(input)
         if match:
             return "wirenboard-" + match.group(1)
+        return ""
 
     logging.debug("Got CSR: %s", csr.decode("utf8"))
     logging.debug("Got x_cert_subject_dn: %s", x_forwarded_tls_client_cert_info)
