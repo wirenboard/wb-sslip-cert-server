@@ -328,8 +328,6 @@ async def issue_cert(csr: Annotated[bytes, File()], x_forwarded_tls_client_cert_
     logging.debug("Got CSR: %s", csr.decode("utf8"))
     logging.debug("Got x_cert_subject_dn: %s", x_forwarded_tls_client_cert_info)
     try:
-        # name = x509.Name.from_rfc4514_string(x_forwarded_tls_client_cert_info)
-        # cn = name.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
         cn = parse_cn(x_forwarded_tls_client_cert_info)
         logging.debug("Extracted CN: %s", cn)
     except Exception as e:
