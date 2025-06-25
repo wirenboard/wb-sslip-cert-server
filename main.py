@@ -320,9 +320,7 @@ async def issue_cert(
         """Parse the subject CN from the x-forwarded header."""
         # FIXME: Traefik wraps CNs with the Subject="%" and encodes them in URL format,
         # could not find proper way to parse it
-        pat = re.compile(
-            "Subject%3D%22CN%3Dwirenboard-(.*?)%22"
-        )
+        pat = re.compile("Subject%3D%22CN%3Dwirenboard-(.*?)%22")
         match = pat.search(input)
         if match:
             return "wirenboard-" + match.group(1)
