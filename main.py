@@ -48,7 +48,7 @@ engine = create_engine(sqlite_url, connect_args=connect_args)
 class CertbotBackendAccount(SQLModel, table=True):
     id: int | None = Field(primary_key=True, default=None)
     eab_kid: str | None = Field()
-    eab_hmac_key: str |None = Field()
+    eab_hmac_key: str | None = Field()
     email: str = Field()
     directory_url: str = Field()
 
