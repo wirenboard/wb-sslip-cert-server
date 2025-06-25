@@ -239,7 +239,7 @@ class CertificateIssuer:
                 raise errors.Error(
                     "The certificate order failed. No further information was provided by the server."
                 )
-            elif body.status == messages.STATUS_VALID and body.certificate is not None:
+            if body.status == messages.STATUS_VALID and body.certificate is not None:
                 certificate_response = self.client_acme._post_as_get(body.certificate)
                 orderr = orderr.update(body=body, fullchain_pem=certificate_response.text)
                 if fetch_alternative_chains:
