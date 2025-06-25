@@ -93,7 +93,7 @@ class CertificateIssuer:
                 directory_url = self.directory_url
             else:
                 logging.debug("Found account_db_entry = %s", account_db_entry)
-                logging.debug("account_db_entry.jwk = %s", account_db_entry.jwk)
+                logging.debug("acc_key = %s", account_db_entry.jwk)
                 self.acc_key = jose.JWK.json_loads(account_db_entry.jwk.decode("utf8"))
                 directory_url = account_db_entry.directory_url
 
