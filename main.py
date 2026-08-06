@@ -36,7 +36,9 @@ class Settings(BaseSettings):
 
     # Ordered, comma-separated list of CAs to try. The first one is the primary,
     # the rest are fallbacks used only when the preceding CA fails.
-    ca_order: str = "letsencrypt"
+    # ZeroSSL is the default primary, so ZEROSSL_EAB_* must be set unless
+    # CA_ORDER is overridden to leave ZeroSSL out.
+    ca_order: str = "zerossl,letsencrypt"
 
     # ACME_URL / EAB_KID / EAB_HMAC_KEY are the pre-multi-CA names of these settings
     # and are still honoured so existing deployments keep working.

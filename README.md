@@ -17,8 +17,19 @@ primary; the rest are fallbacks, tried only when the preceding CA fails to
 issue. Falling back covers a CA-side problem — an outage, a rate limit, a
 rejected order — so that one CA having a bad day doesn't stop issuance.
 
+The default is ZeroSSL first, Let's Encrypt as the fallback:
+
 ```
-CA_ORDER=letsencrypt,zerossl
+CA_ORDER=zerossl,letsencrypt
+```
+
+**ZeroSSL requires EAB credentials, so `ZEROSSL_EAB_KID` and
+`ZEROSSL_EAB_HMAC_KEY` are mandatory under the default `CA_ORDER`** — the
+service refuses to start without them. A deployment that wants Let's Encrypt
+only must say so explicitly:
+
+```
+CA_ORDER=letsencrypt
 ```
 
 Failures that are *not* the CA's fault do not trigger a fallback:
@@ -36,13 +47,13 @@ rejected at startup, not on the first request.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `CA_ORDER` | `letsencrypt` | Ordered list of CAs to try |
+| `CA_ORDER` | `zerossl,letsencrypt` | Ordered list of CAs to try |
 | `EMAIL` | — | Account e-mail, shared by all CAs |
 | `ISSUING_TIMEOUT` | `120` | Deadline **per CA attempt**, in seconds |
 | `LETSENCRYPT_ACME_URL` | Let's Encrypt production directory | |
 | `LETSENCRYPT_EAB_KID` / `LETSENCRYPT_EAB_HMAC_KEY` | unset | Optional; Let's Encrypt does not need EAB |
 | `ZEROSSL_ACME_URL` | `https://acme.zerossl.com/v2/DV90` | |
-| `ZEROSSL_EAB_KID` / `ZEROSSL_EAB_HMAC_KEY` | unset | **Required** when `zerossl` is in `CA_ORDER` |
+| `ZEROSSL_EAB_KID` / `ZEROSSL_EAB_HMAC_KEY` | unset | **Required** when `zerossl` is in `CA_ORDER`, which it is by default |
 
 `ACME_URL`, `EAB_KID` and `EAB_HMAC_KEY` are the older names of the three
 `LETSENCRYPT_*` variables and still work.
