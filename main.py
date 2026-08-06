@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import sys
+from dataclasses import dataclass
 from typing import Annotated
 
 import josepy as jose
@@ -14,19 +15,46 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI, File, Header, HTTPException
+from pydantic import AliasChoices
+from pydantic import Field as PydanticField
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 display_obj.set_display(display_obj.FileDisplay(sys.stdout, False))
+
+LETSENCRYPT_DIRECTORY_URL = "https://acme-v02.api.letsencrypt.org/directory"
+ZEROSSL_DIRECTORY_URL = "https://acme.zerossl.com/v2/DV90"
+
+# CAs that refuse to create an account without External Account Binding credentials.
+EAB_REQUIRED_CAS = {"zerossl"}
 
 
 class Settings(BaseSettings):
     dns_auth_url: str = "http://localhost:8080/update"
     dns_auth_propagation_delay: int = 5
     email: str
-    eab_kid: str | None = None
-    eab_hmac_key: str | None = None
-    acme_url: str = "https://acme-v02.api.letsencrypt.org/directory"
+
+    # Ordered, comma-separated list of CAs to try. The first one is the primary,
+    # the rest are fallbacks used only when the preceding CA fails.
+    ca_order: str = "letsencrypt"
+
+    # ACME_URL / EAB_KID / EAB_HMAC_KEY are the pre-multi-CA names of these settings
+    # and are still honoured so existing deployments keep working.
+    letsencrypt_acme_url: str = PydanticField(
+        default=LETSENCRYPT_DIRECTORY_URL,
+        validation_alias=AliasChoices("letsencrypt_acme_url", "acme_url"),
+    )
+    letsencrypt_eab_kid: str | None = PydanticField(
+        default=None, validation_alias=AliasChoices("letsencrypt_eab_kid", "eab_kid")
+    )
+    letsencrypt_eab_hmac_key: str | None = PydanticField(
+        default=None, validation_alias=AliasChoices("letsencrypt_eab_hmac_key", "eab_hmac_key")
+    )
+
+    zerossl_acme_url: str = ZEROSSL_DIRECTORY_URL
+    zerossl_eab_kid: str | None = None
+    zerossl_eab_hmac_key: str | None = None
+
     db_file_name: str = "database.db"
     log_level: str = "DEBUG"
     issuing_timeout: int = 120
@@ -38,6 +66,111 @@ class Settings(BaseSettings):
 settings = Settings()
 logging.getLogger("").setLevel(logging.getLevelName(settings.log_level))
 logging.debug("This will get logged")
+
+
+@dataclass(frozen=True)
+class AcmeProvider:
+    """A single upstream CA the service can issue certificates through."""
+
+    name: str
+    directory_url: str
+    eab_kid: str | None
+    eab_hmac_key: str | None
+
+
+def build_providers(local_settings: Settings) -> list[AcmeProvider]:
+    """Turn the flat settings into the ordered list of CAs to try.
+
+    Raises ValueError on a misconfiguration so the service fails at startup
+    rather than on the first certificate request.
+    """
+    known = {
+        "letsencrypt": AcmeProvider(
+            name="letsencrypt",
+            directory_url=local_settings.letsencrypt_acme_url,
+            eab_kid=local_settings.letsencrypt_eab_kid,
+            eab_hmac_key=local_settings.letsencrypt_eab_hmac_key,
+        ),
+        "zerossl": AcmeProvider(
+            name="zerossl",
+            directory_url=local_settings.zerossl_acme_url,
+            eab_kid=local_settings.zerossl_eab_kid,
+            eab_hmac_key=local_settings.zerossl_eab_hmac_key,
+        ),
+    }
+
+    names = [name.strip().lower() for name in local_settings.ca_order.split(",") if name.strip()]
+    if not names:
+        raise ValueError("ca_order must name at least one CA")
+    if len(names) != len(set(names)):
+        raise ValueError(f"ca_order must not repeat a CA: {names}")
+
+    providers = []
+    for name in names:
+        if name not in known:
+            raise ValueError(f"Unknown CA '{name}' in ca_order. Known CAs: {sorted(known)}")
+        provider = known[name]
+        if name in EAB_REQUIRED_CAS and not (provider.eab_kid and provider.eab_hmac_key):
+            raise ValueError(
+                f"CA '{name}' requires External Account Binding credentials: "
+                f"set {name.upper()}_EAB_KID and {name.upper()}_EAB_HMAC_KEY"
+            )
+        providers.append(provider)
+    return providers
+
+
+CA_PROVIDERS = build_providers(settings)
+logging.info("Configured CAs, in order of preference: %s", [p.name for p in CA_PROVIDERS])
+
+
+class DnsAuthError(RuntimeError):
+    """Publishing the DNS-01 challenge record failed.
+
+    This is our own infrastructure, not the CA's, so falling back to another CA
+    would fail the same way.
+    """
+
+
+class CaAttemptError(RuntimeError):
+    """Issuing through one CA failed in a way another CA might handle."""
+
+
+def extract_identifiers(csr_pem: bytes) -> tuple[list[str], list[str]]:
+    """Extract DNS and IP identifiers from a CSR.
+    :param csr_pem: The CSR in PEM format.
+    :return: A tuple of lists of DNS and IP identifiers.
+    """
+    csr = x509.load_pem_x509_csr(csr_pem)
+    dns_names = crypto_util.get_names_from_subject_and_extensions(csr.subject, csr.extensions)
+    dns_names = [name.lower() for name in dns_names]
+    try:
+        san_ext = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+    except x509.ExtensionNotFound:
+        ip_names = []
+    else:
+        ip_names = san_ext.value.get_values_for_type(x509.IPAddress)
+    return dns_names, ip_names
+
+
+def validate_csr(csr_pem: bytes, allowed_domains: list[str]) -> None:
+    """Reject a CSR the client is not allowed to have signed.
+
+    Checked once per request, before any CA is contacted: these are client
+    errors, so retrying them against a fallback CA would only waste time.
+    """
+    dns_names, ip_names = extract_identifiers(csr_pem)
+    logging.info("DNS names: %s", dns_names)
+    logging.info("IP names: %s", ip_names)
+    if ip_names:
+        raise HTTPException(status_code=422, detail="IP identifiers in CSR are not supported")
+
+    not_allowed = sorted(set(dns_names) - set(allowed_domains))
+    if not_allowed:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Requested domains are not allowed: {not_allowed}. Allowed: {allowed_domains}",
+        )
+
 
 sqlite_url = f"sqlite:///{settings.db_file_name}"
 
@@ -57,9 +190,8 @@ class CertbotBackendAccount(SQLModel, table=True):
 
 
 class CertificateIssuer:
-    def __init__(self, local_settings, allowed_domains: list[str], engine):
+    def __init__(self, provider: AcmeProvider, engine):
         self.engine = engine
-        self.allowed_domains = allowed_domains
         self.email = settings.email
 
         self.acc_key = None
@@ -67,9 +199,10 @@ class CertificateIssuer:
         self.client_acme = None
         self.regr = None
         self.upstream_account = None
-        self.eab_kid = local_settings.eab_kid
-        self.eab_hmac_key = local_settings.eab_hmac_key
-        self.directory_url = local_settings.acme_url
+        self.provider_name = provider.name
+        self.eab_kid = provider.eab_kid
+        self.eab_hmac_key = provider.eab_hmac_key
+        self.directory_url = provider.directory_url
 
     def create_account_key(self):
         return jose.JWKRSA(
@@ -160,32 +293,19 @@ class CertificateIssuer:
                     data = {"domain": validation_name.lower() + ".", "txt": validation}
                     # Our DNS server for ACME challenges is typically run on the same machine,
                     # so we don't really need async http here
-                    authenticator_response = requests.post(
-                        settings.dns_auth_url, data=json.dumps(data), timeout=10
-                    )
+                    try:
+                        authenticator_response = requests.post(
+                            settings.dns_auth_url, data=json.dumps(data), timeout=10
+                        )
+                    except requests.RequestException as exc:
+                        raise DnsAuthError(f"DNS server at {settings.dns_auth_url} is unreachable") from exc
                     if authenticator_response.status_code != 200:
-                        raise RuntimeError(f"Failed to update DNS record: {response.text}")
+                        raise DnsAuthError(f"Failed to update DNS record: {authenticator_response.text}")
 
                     await asyncio.sleep(settings.dns_auth_propagation_delay)
 
                     # Let the CA server know that we are ready for the challenge.
                     self.client_acme.answer_challenge(challb, response)
-
-    def extract_identifiers(self, csr_pem: bytes) -> tuple[list[str], list[str]]:
-        """Extract DNS and IP identifiers from a CSR.
-        :param csr_pem: The CSR in PEM format.
-        :return: A tuple of lists of DNS and IP identifiers.
-        """
-        csr = x509.load_pem_x509_csr(csr_pem)
-        dns_names = crypto_util.get_names_from_subject_and_extensions(csr.subject, csr.extensions)
-        dns_names = [name.lower() for name in dns_names]
-        try:
-            san_ext = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName)
-        except x509.ExtensionNotFound:
-            ip_names = []
-        else:
-            ip_names = san_ext.value.get_values_for_type(x509.IPAddress)
-        return dns_names, ip_names
 
     async def poll_authorizations(
         self, orderr: messages.OrderResource, deadline: datetime.datetime
@@ -251,26 +371,19 @@ class CertificateIssuer:
         raise errors.TimeoutError()
 
     async def sign(self, csr):
-        self.get_acme_client_and_account()
-        dns_names, ip_names = self.extract_identifiers(csr)
-        logging.info("DNS names: %s", dns_names)
-        logging.info("IP names: %s", ip_names)
-        if ip_names:
-            raise HTTPException(status_code=422, detail="IP identifiers in CSR are not supported")
+        """Issue a certificate for an already-validated CSR through this CA.
 
-        if set(dns_names) - set(self.allowed_domains):
-            not_allowed = list(set(dns_names) - set(self.allowed_domains))
-            raise HTTPException(
-                status_code=422,
-                detail=f"Requested domains are not allowed: {not_allowed}. Allowed: {self.allowed_domains}",
-            )
-
-        orderr = self.client_acme.new_order(csr)
-
-        logging.debug("orderr: %s", orderr)
-
+        Any failure attributable to the CA is raised as CaAttemptError so the
+        caller can move on to the next CA in the chain. A DnsAuthError means our
+        own DNS side is broken and is left to propagate.
+        """
         deadline = datetime.datetime.now() + datetime.timedelta(seconds=settings.issuing_timeout)
         try:
+            self.get_acme_client_and_account()
+
+            orderr = self.client_acme.new_order(csr)
+            logging.debug("orderr: %s", orderr)
+
             logging.debug("Got order status: %s", orderr.body.status)
             if orderr.body.status == messages.STATUS_PENDING:
                 await self.validate_challenges(orderr, deadline)
@@ -293,10 +406,13 @@ class CertificateIssuer:
                 return orderr.fullchain_pem
 
             logging.debug("Got order status (4): %s", orderr.body.status)
-            if orderr.body.status == messages.STATUS_INVALID:
-                raise HTTPException(status_code=500, detail="Order is invalid")
+            raise CaAttemptError(f"{self.provider_name}: order ended in status '{orderr.body.status}'")
         except errors.TimeoutError as exc:
-            raise HTTPException(status_code=500, detail="timeout") from exc
+            raise CaAttemptError(
+                f"{self.provider_name}: timed out after {settings.issuing_timeout}s"
+            ) from exc
+        except (errors.Error, requests.RequestException) as exc:
+            raise CaAttemptError(f"{self.provider_name}: {exc}") from exc
 
 
 def create_db_and_tables():
@@ -343,8 +459,31 @@ async def issue_cert(
 
     allowed_domains = [f"*.{wb_serial}.{settings.domain_suffix}", f"{wb_serial}.{settings.domain_suffix}"]
 
-    issuer = CertificateIssuer(settings, allowed_domains, engine)
-    fullchain_pem = await issuer.sign(csr)
-    logging.debug("resulting cert chain %s", fullchain_pem)
+    validate_csr(csr, allowed_domains)
 
-    return {"fullchain_pem": fullchain_pem}
+    # Try the configured CAs in order, so that an outage or a rate limit at the
+    # primary CA does not take certificate issuance down with it.
+    last_error = None
+    for provider in CA_PROVIDERS:
+        logging.info("Requesting a certificate for %s from %s", wb_serial, provider.name)
+        try:
+            fullchain_pem = await CertificateIssuer(provider, engine).sign(csr)
+        except DnsAuthError as exc:
+            # Our own DNS side is broken; another CA would hit the same wall.
+            logging.error("DNS-01 challenge could not be published", exc_info=exc)
+            raise HTTPException(
+                status_code=503, detail="Failed to publish the DNS-01 challenge record"
+            ) from exc
+        except CaAttemptError as exc:
+            logging.warning("CA %s failed to issue a certificate: %s", provider.name, exc)
+            last_error = exc
+            continue
+
+        logging.info("Got a certificate for %s from %s", wb_serial, provider.name)
+        logging.debug("resulting cert chain %s", fullchain_pem)
+        return {"fullchain_pem": fullchain_pem}
+
+    raise HTTPException(
+        status_code=502,
+        detail=f"All configured CAs failed to issue a certificate. Last error: {last_error}",
+    )
